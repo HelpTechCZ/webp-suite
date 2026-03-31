@@ -10,6 +10,13 @@ class WebP_Suite_GitHub_Updater {
     private string $github_repo;
     private ?object $github_response = null;
 
+    /** Povolené domény pro stažení balíčku */
+    private const ALLOWED_DOWNLOAD_HOSTS = [
+        'github.com',
+        'api.github.com',
+        'codeload.github.com',
+    ];
+
     public function __construct(string $plugin_file, string $github_repo) {
         $this->plugin_file = $plugin_file;
         $this->slug        = plugin_basename($plugin_file);
@@ -34,21 +41,25 @@ class WebP_Suite_GitHub_Updater {
 
         $url = "https://api.github.com/repos/{$this->github_repo}/releases/latest";
         $response = wp_remote_get($url, [
-            'headers' => [
+            'headers'   => [
                 'Accept'     => 'application/vnd.github.v3+json',
                 'User-Agent' => 'WebP-Suite-WP-Plugin',
             ],
-            'timeout' => 10,
+            'timeout'   => 10,
+            'sslverify' => true,
         ]);
 
         if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+            // Kešovat i neúspěch — zabránit opakovaným requestům při výpadku
             $this->github_response = (object)[];
+            set_transient($transient_key, $this->github_response, 1 * HOUR_IN_SECONDS);
             return $this->github_response;
         }
 
         $body = json_decode(wp_remote_retrieve_body($response));
         if (!$body || empty($body->tag_name)) {
             $this->github_response = (object)[];
+            set_transient($transient_key, $this->github_response, 1 * HOUR_IN_SECONDS);
             return $this->github_response;
         }
 
@@ -58,20 +69,52 @@ class WebP_Suite_GitHub_Updater {
         return $this->github_response;
     }
 
+    /**
+     * Extrahuje a validuje verzi z tag_name.
+     * Přijímá pouze formát semver (x.y.z), odmítne cokoliv jiného.
+     */
     private function get_remote_version(): string {
         $release = $this->get_repo_release();
         if (empty($release->tag_name)) {
             return '';
         }
-        return ltrim($release->tag_name, 'vV');
+
+        $version = ltrim($release->tag_name, 'vV');
+
+        // Striktní validace semver formátu
+        if (!preg_match('/^\d+\.\d+\.\d+$/', $version)) {
+            return '';
+        }
+
+        return $version;
     }
 
+    /**
+     * Vrátí URL pro stažení balíčku, pouze pokud je z povolené GitHub domény.
+     */
     private function get_download_url(): string {
         $release = $this->get_repo_release();
         if (empty($release->zipball_url)) {
             return '';
         }
-        return $release->zipball_url;
+
+        $url = $release->zipball_url;
+
+        // Validace: musí být HTTPS a z povolené GitHub domény
+        $parsed = wp_parse_url($url);
+        if (
+            empty($parsed['scheme']) || $parsed['scheme'] !== 'https' ||
+            empty($parsed['host']) || !in_array($parsed['host'], self::ALLOWED_DOWNLOAD_HOSTS, true)
+        ) {
+            return '';
+        }
+
+        // Validace: URL musí obsahovat cestu k našemu repu
+        if (strpos($url, $this->github_repo) === false) {
+            return '';
+        }
+
+        return $url;
     }
 
     public function check_update($transient) {
@@ -80,7 +123,9 @@ class WebP_Suite_GitHub_Updater {
         }
 
         $remote_version = $this->get_remote_version();
-        if (!$remote_version) {
+        $download_url   = $this->get_download_url();
+
+        if (!$remote_version || !$download_url) {
             return $transient;
         }
 
@@ -92,7 +137,7 @@ class WebP_Suite_GitHub_Updater {
                 'plugin'      => $this->slug,
                 'new_version' => $remote_version,
                 'url'         => "https://github.com/{$this->github_repo}",
-                'package'     => $this->get_download_url(),
+                'package'     => $download_url,
             ];
         }
 
@@ -113,15 +158,22 @@ class WebP_Suite_GitHub_Updater {
             return $result;
         }
 
+        $remote_version = $this->get_remote_version();
+        $download_url   = $this->get_download_url();
+
+        if (!$remote_version || !$download_url) {
+            return $result;
+        }
+
         $plugin_data = get_plugin_data($this->plugin_file);
 
         return (object)[
             'name'          => $plugin_data['Name'],
             'slug'          => dirname($this->slug),
-            'version'       => $this->get_remote_version(),
+            'version'       => $remote_version,
             'author'        => $plugin_data['Author'],
             'homepage'      => "https://github.com/{$this->github_repo}",
-            'download_link' => $this->get_download_url(),
+            'download_link' => $download_url,
             'sections'      => [
                 'description' => $plugin_data['Description'],
                 'changelog'   => nl2br(esc_html($release->body ?? 'Viz GitHub releases.')),
@@ -137,7 +189,11 @@ class WebP_Suite_GitHub_Updater {
         global $wp_filesystem;
 
         $plugin_dir = WP_PLUGIN_DIR . '/' . dirname($this->slug);
-        $wp_filesystem->move($result['destination'], $plugin_dir);
+
+        if (!$wp_filesystem->move($result['destination'], $plugin_dir)) {
+            return new WP_Error('move_failed', 'Nepodařilo se přesunout plugin do cílové složky.');
+        }
+
         $result['destination'] = $plugin_dir;
 
         if (is_plugin_active($this->slug)) {
