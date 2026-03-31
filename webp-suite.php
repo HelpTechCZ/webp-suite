@@ -157,6 +157,9 @@ class WebP_Suite {
             wp_send_json_error('Nepodporovaný formát obrázku: ' . $original_name);
         }
 
+        // Korekce EXIF orientace (fotky z telefonu/fotoaparátu)
+        $src = $this->fix_orientation($src, $original_path);
+
         $src_w = imagesx($src);
         $src_h = imagesy($src);
 
@@ -242,6 +245,50 @@ class WebP_Suite {
             'dimensions'    => $dst_w . ' x ' . $dst_h,
             'attachment_id' => $attachment_id,
         ]);
+    }
+
+    /**
+     * Opraví orientaci obrázku podle EXIF dat.
+     * JPEG fotky z telefonu/fotoaparátu mají pixely uložené v landscape,
+     * ale EXIF tag říká jak je otočit. GD tento tag ignoruje.
+     */
+    private function fix_orientation($img, string $path) {
+        if (!function_exists('exif_read_data')) {
+            return $img;
+        }
+
+        $exif = @exif_read_data($path);
+        if (!$exif || empty($exif['Orientation'])) {
+            return $img;
+        }
+
+        switch ((int)$exif['Orientation']) {
+            case 2: // Zrcadlově horizontálně
+                imageflip($img, IMG_FLIP_HORIZONTAL);
+                break;
+            case 3: // Otočeno 180°
+                $img = imagerotate($img, 180, 0);
+                break;
+            case 4: // Zrcadlově vertikálně
+                imageflip($img, IMG_FLIP_VERTICAL);
+                break;
+            case 5: // Zrcadlově horizontálně + otočeno 270° CW
+                imageflip($img, IMG_FLIP_HORIZONTAL);
+                $img = imagerotate($img, 270, 0);
+                break;
+            case 6: // Otočeno 90° CW (nejčastější — portrait fotka)
+                $img = imagerotate($img, 270, 0);
+                break;
+            case 7: // Zrcadlově horizontálně + otočeno 90° CW
+                imageflip($img, IMG_FLIP_HORIZONTAL);
+                $img = imagerotate($img, 90, 0);
+                break;
+            case 8: // Otočeno 270° CW
+                $img = imagerotate($img, 90, 0);
+                break;
+        }
+
+        return $img;
     }
 
     private function load_image(string $path) {
