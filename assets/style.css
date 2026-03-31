@@ -1,0 +1,187 @@
+.webp-suite-wrap {
+    max-width: 900px;
+}
+
+.webp-suite-card {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    padding: 20px 24px;
+    margin: 16px 0;
+    box-shadow: 0 1px 1px rgba(0,0,0,.04);
+}
+
+.webp-suite-card h2 {
+    margin-top: 0;
+    padding-top: 0;
+}
+
+/* Dropzone */
+.ws-dropzone {
+    border: 3px dashed #b4b9be;
+    border-radius: 8px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all .2s;
+    background: #f9f9f9;
+}
+
+.ws-dropzone:hover,
+.ws-dropzone.ws-dragover {
+    border-color: #0073aa;
+    background: #f0f6fc;
+}
+
+.ws-dropzone .dashicons {
+    font-size: 48px;
+    width: 48px;
+    height: 48px;
+    color: #0073aa;
+    display: block;
+    margin: 0 auto 12px;
+}
+
+.ws-dropzone p {
+    margin: 8px 0;
+    font-size: 14px;
+}
+
+/* Queue */
+.ws-queue-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.ws-queue-item {
+    position: relative;
+    border-radius: 4px;
+    overflow: hidden;
+    aspect-ratio: 1;
+    background: #f0f0f0;
+}
+
+.ws-queue-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.ws-queue-item .ws-remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    background: rgba(0,0,0,.6);
+    color: #fff;
+    border: none;
+    border-radius: 50%;
+    width: 22px;
+    height: 22px;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 22px;
+    text-align: center;
+    padding: 0;
+}
+
+.ws-queue-item .ws-remove:hover {
+    background: #dc3232;
+}
+
+.ws-queue-item .ws-filename {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(0,0,0,.6);
+    color: #fff;
+    font-size: 10px;
+    padding: 2px 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ws-badge {
+    display: inline-block;
+    background: #0073aa;
+    color: #fff;
+    border-radius: 10px;
+    padding: 0 8px;
+    font-size: 13px;
+    vertical-align: middle;
+    margin-left: 4px;
+}
+
+.ws-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.ws-actions .button-hero .dashicons {
+    vertical-align: middle;
+    margin-right: 4px;
+}
+
+/* Progress */
+.ws-progress-bar {
+    height: 24px;
+    background: #e5e5e5;
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+
+.ws-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #0073aa, #00a0d2);
+    border-radius: 12px;
+    width: 0;
+    transition: width .3s;
+}
+
+#ws-progress-text {
+    text-align: center;
+    font-weight: 600;
+}
+
+/* Results */
+#ws-results-table {
+    margin-bottom: 16px;
+}
+
+#ws-results-table .ws-status-ok {
+    color: #46b450;
+    font-weight: 600;
+}
+
+#ws-results-table .ws-status-err {
+    color: #dc3232;
+    font-weight: 600;
+}
+
+.ws-summary {
+    background: #f0f6fc;
+    border-left: 4px solid #0073aa;
+    padding: 12px 16px;
+    font-size: 14px;
+}
+
+.ws-summary strong {
+    font-size: 16px;
+}
+
+/* Range slider */
+.ws-range {
+    vertical-align: middle;
+    margin-right: 8px;
+}
+
+/* Small-text helper */
+input.small-text {
+    width: 80px;
+}
