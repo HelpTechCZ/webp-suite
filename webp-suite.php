@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WebP Suite
  * Description: Hromadný upload obrázků s resize podle kratší strany, konverzí na WebP a smazáním originálů.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: HelpTech.cz
  * Text Domain: webp-suite
  * Requires PHP: 7.4
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('WEBP_SUITE_VERSION', '1.0.0');
+define('WEBP_SUITE_VERSION', '1.1.0');
 define('WEBP_SUITE_DIR', plugin_dir_path(__FILE__));
 define('WEBP_SUITE_URL', plugin_dir_url(__FILE__));
 
