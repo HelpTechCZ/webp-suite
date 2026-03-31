@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name: WebP Suite
- * Description: Hromadný upload obrázků s ořezem na požadovaný rozměr, konverzí na WebP a smazáním originálů.
+ * Description: Hromadný upload obrázků s resize podle kratší strany, konverzí na WebP a smazáním originálů.
  * Version: 1.0.0
  * Author: HelpTech.cz
  * Text Domain: webp-suite
