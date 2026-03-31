@@ -1,9 +1,13 @@
 <?php if (!defined('ABSPATH')) exit; ?>
-<?php $webp_support = function_exists('imagewebp'); ?>
+<?php
+$webp_support = function_exists('imagewebp');
+$settings = $this->get_settings();
+settings_errors('webp_suite');
+?>
 
 <div class="wrap webp-suite-wrap">
     <h1>WebP Suite</h1>
-    <p class="description">Nahrajte obrázky v libovolném formátu — plugin je zmenší podle kratší strany se zachováním poměru stran, převede na WebP a originály smaže.</p>
+    <p class="description">Automatická konverze obrázků na WebP při uploadu + hromadný převod.</p>
 
     <?php if (!$webp_support): ?>
         <div class="notice notice-error">
@@ -11,37 +15,60 @@
         </div>
     <?php endif; ?>
 
+    <!-- Nastavení -->
     <div class="webp-suite-card">
         <h2>Nastavení</h2>
-        <table class="form-table">
-            <tr>
-                <th><label for="ws-short-side">Kratší strana (px)</label></th>
-                <td>
-                    <input type="number" id="ws-short-side" value="800" min="1" max="10000" class="small-text">
-                    <p class="description">Obrázek se zmenší tak, aby kratší strana měla tento rozměr. Poměr stran zůstane zachován. Menší obrázky se nezvětšují.</p>
-                </td>
-            </tr>
-            <tr>
-                <th><label for="ws-quality">Kvalita WebP (%)</label></th>
-                <td>
-                    <input type="range" id="ws-quality" value="85" min="1" max="100" class="ws-range">
-                    <span id="ws-quality-val">85</span>%
-                </td>
-            </tr>
-            <tr>
-                <th>Originály</th>
-                <td>
-                    <label>
-                        <input type="checkbox" id="ws-delete-originals" checked>
-                        Smazat původní soubory po konverzi
-                    </label>
-                </td>
-            </tr>
-        </table>
+        <form method="post">
+            <?php wp_nonce_field('webp_suite_settings'); ?>
+            <input type="hidden" name="webp_suite_save_settings" value="1">
+            <table class="form-table">
+                <tr>
+                    <th><label for="ws-auto-convert">Automatická konverze</label></th>
+                    <td>
+                        <label>
+                            <input type="checkbox" name="auto_convert" id="ws-auto-convert" <?php checked($settings['auto_convert']); ?>>
+                            Automaticky převádět obrázky na WebP při každém uploadu (editor, média)
+                        </label>
+                        <p class="description">Když je zapnuto, každý JPG/PNG/GIF nahraný kdekoliv ve WordPressu se automaticky zmenší a převede na WebP.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th><label for="ws-short-side">Kratší strana (px)</label></th>
+                    <td>
+                        <input type="number" name="short_side" id="ws-short-side" value="<?php echo esc_attr($settings['short_side']); ?>" min="1" max="10000" class="small-text">
+                        <p class="description">Obrázek se zmenší tak, aby kratší strana měla tento rozměr. Poměr stran zůstane zachován. Menší obrázky se nezvětšují.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th><label for="ws-quality">Kvalita WebP (%)</label></th>
+                    <td>
+                        <input type="range" name="quality" id="ws-quality" value="<?php echo esc_attr($settings['quality']); ?>" min="1" max="100" class="ws-range">
+                        <span id="ws-quality-val"><?php echo esc_html($settings['quality']); ?></span>%
+                    </td>
+                </tr>
+                <tr>
+                    <th>Originály</th>
+                    <td>
+                        <label>
+                            <input type="checkbox" name="delete_original" <?php checked($settings['delete_original']); ?>>
+                            Smazat původní soubory po konverzi
+                        </label>
+                    </td>
+                </tr>
+            </table>
+            <?php submit_button('Uložit nastavení'); ?>
+        </form>
     </div>
 
+    <?php if ($settings['auto_convert']): ?>
+        <div class="notice notice-info inline" style="margin: 0 0 16px;">
+            <p><strong>Auto-konverze je zapnutá.</strong> Všechny obrázky nahrané přes editor nebo média se automaticky převedou na WebP (<?php echo esc_html($settings['short_side']); ?>px, <?php echo esc_html($settings['quality']); ?>%).</p>
+        </div>
+    <?php endif; ?>
+
+    <!-- Hromadný upload -->
     <div class="webp-suite-card">
-        <h2>Upload obrázků</h2>
+        <h2>Hromadný upload</h2>
         <div class="ws-dropzone" id="ws-dropzone">
             <div class="ws-dropzone-inner">
                 <span class="dashicons dashicons-upload"></span>

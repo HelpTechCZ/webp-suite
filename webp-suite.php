@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: WebP Suite
- * Description: Hromadný upload obrázků s resize podle kratší strany, konverzí na WebP a smazáním originálů.
- * Version: 1.1.0
+ * Description: Automatická konverze obrázků na WebP při uploadu + hromadný převod. Resize podle kratší strany, zachování poměru stran.
+ * Version: 1.2.0
  * Author: HelpTech.cz
  * Text Domain: webp-suite
  * Requires PHP: 7.4
@@ -12,19 +12,51 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('WEBP_SUITE_VERSION', '1.1.0');
+define('WEBP_SUITE_VERSION', '1.2.0');
 define('WEBP_SUITE_DIR', plugin_dir_path(__FILE__));
 define('WEBP_SUITE_URL', plugin_dir_url(__FILE__));
 
 class WebP_Suite {
 
+    /** Max velikost uploadu: 20 MB */
+    const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
+
+    /** Max pixelový budget (šířka × výška) */
+    const MAX_PIXEL_BUDGET = 25000000;
+
+    /** Max rozměr zdrojového obrázku (px) */
+    const MAX_SOURCE_DIMENSION = 16000;
+
+    /** Povolené MIME typy pro konverzi */
+    const CONVERTIBLE_MIMES = [
+        'image/jpeg', 'image/jpg', 'image/png', 'image/gif',
+        'image/bmp', 'image/x-ms-bmp', 'image/avif',
+    ];
+
+    /** Výchozí nastavení */
+    const DEFAULTS = [
+        'short_side'    => 800,
+        'quality'       => 85,
+        'auto_convert'  => false,
+        'delete_original' => true,
+    ];
+
     public function __construct() {
         add_action('admin_menu', [$this, 'add_admin_page']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
+        add_action('admin_init', [$this, 'save_settings']);
         add_action('wp_ajax_webp_suite_process', [$this, 'ajax_process_image']);
-        // Povolit upload WebP ve WordPress
+
+        // Povolit upload WebP
         add_filter('mime_types', [$this, 'allow_webp_upload']);
         add_filter('upload_mimes', [$this, 'allow_webp_upload']);
+
+        // Auto-konverze při uploadu
+        add_filter('wp_handle_upload', [$this, 'auto_convert_on_upload']);
+    }
+
+    public function get_settings(): array {
+        return wp_parse_args(get_option('webp_suite_settings', []), self::DEFAULTS);
     }
 
     public function allow_webp_upload($mimes) {
@@ -32,14 +64,12 @@ class WebP_Suite {
         return $mimes;
     }
 
+    // =========================================================================
+    // Admin stránka
+    // =========================================================================
+
     public function add_admin_page() {
-        add_media_page(
-            'WebP Suite',
-            'WebP Suite',
-            'upload_files',
-            'webp-suite',
-            [$this, 'render_page']
-        );
+        add_media_page('WebP Suite', 'WebP Suite', 'upload_files', 'webp-suite', [$this, 'render_page']);
     }
 
     public function enqueue_assets($hook) {
@@ -61,20 +91,76 @@ class WebP_Suite {
         include WEBP_SUITE_DIR . 'views/admin-page.php';
     }
 
-    /** Max velikost uploadu: 20 MB */
-    const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
+    public function save_settings() {
+        if (!isset($_POST['webp_suite_save_settings'])) {
+            return;
+        }
+        check_admin_referer('webp_suite_settings');
+        if (!current_user_can('manage_options')) {
+            return;
+        }
 
-    /** Max pixelový budget (šířka × výška) — ochrana proti memory exhaustion */
-    const MAX_PIXEL_BUDGET = 25000000; // 25 Mpx = ~100 MB v GD
+        $settings = [
+            'short_side'      => max(1, min(10000, absint($_POST['short_side'] ?? 800))),
+            'quality'         => max(1, min(100, absint($_POST['quality'] ?? 85))),
+            'auto_convert'    => isset($_POST['auto_convert']),
+            'delete_original' => isset($_POST['delete_original']),
+        ];
 
-    /** Max rozměr zdrojového obrázku (px) — ochrana proti decompression bomb */
-    const MAX_SOURCE_DIMENSION = 16000;
+        update_option('webp_suite_settings', $settings);
 
-    /** Povolené MIME typy obrázků */
-    const ALLOWED_MIMES = [
-        'image/jpeg', 'image/jpg', 'image/png', 'image/gif',
-        'image/bmp', 'image/x-ms-bmp', 'image/webp', 'image/avif',
-    ];
+        add_settings_error('webp_suite', 'settings_saved', 'Nastavení uloženo.', 'success');
+    }
+
+    // =========================================================================
+    // Auto-konverze při uploadu (editor, média)
+    // =========================================================================
+
+    public function auto_convert_on_upload(array $upload): array {
+        $settings = $this->get_settings();
+
+        if (!$settings['auto_convert']) {
+            return $upload;
+        }
+
+        // Nepřevádět pokud už je WebP nebo není obrázek ke konverzi
+        $mime = $upload['type'] ?? '';
+        if (!in_array($mime, self::CONVERTIBLE_MIMES, true)) {
+            return $upload;
+        }
+
+        $original_path = $upload['file'];
+
+        // Bezpečnostní kontroly
+        if (!file_exists($original_path)) {
+            return $upload;
+        }
+
+        $result = $this->process_image($original_path, $settings['short_side'], $settings['quality']);
+        if (!$result) {
+            return $upload;
+        }
+
+        // Smazat originál
+        if ($settings['delete_original'] && $result['webp_path'] !== $original_path) {
+            @unlink($original_path);
+        }
+
+        // Vrátit WebP místo originálu — WordPress zaregistruje WebP jako attachment
+        $upload['file'] = $result['webp_path'];
+        $upload['type'] = 'image/webp';
+        $upload['url']  = str_replace(
+            wp_normalize_path(wp_upload_dir()['basedir']),
+            wp_upload_dir()['baseurl'],
+            wp_normalize_path($result['webp_path'])
+        );
+
+        return $upload;
+    }
+
+    // =========================================================================
+    // AJAX handler pro hromadný upload
+    // =========================================================================
 
     public function ajax_process_image() {
         check_ajax_referer('webp_suite', 'nonce');
@@ -89,19 +175,16 @@ class WebP_Suite {
 
         $file = $_FILES['image'];
 
-        // Kontrola chyby uploadu
         if ($file['error'] !== UPLOAD_ERR_OK) {
             wp_send_json_error('Upload selhal s chybou: ' . $file['error']);
         }
 
-        // Omezení velikosti souboru
         if ($file['size'] > self::MAX_UPLOAD_SIZE) {
             wp_send_json_error('Soubor je příliš velký (max 20 MB).');
         }
 
-        // Ověření skutečného MIME typu (podle obsahu, ne přípony)
         $real_mime = wp_get_image_mime($file['tmp_name']);
-        if (!$real_mime || !in_array($real_mime, self::ALLOWED_MIMES, true)) {
+        if (!$real_mime || !in_array($real_mime, array_merge(self::CONVERTIBLE_MIMES, ['image/webp']), true)) {
             wp_send_json_error('Nepovolený typ souboru: ' . ($real_mime ?: 'neznámý'));
         }
 
@@ -111,16 +194,22 @@ class WebP_Suite {
 
         $original_name = sanitize_file_name($file['name']);
 
-        // Upload originálu přes WP (další vrstva validace)
+        // Dočasně vypnout auto-konverzi aby se nezpracoval dvakrát
+        remove_filter('wp_handle_upload', [$this, 'auto_convert_on_upload']);
+
         $upload = wp_handle_upload($file, ['test_form' => false]);
+
+        // Vrátit filtr
+        add_filter('wp_handle_upload', [$this, 'auto_convert_on_upload']);
+
         if (isset($upload['error'])) {
-            // Nezobrazovat plnou cestu — jen obecná hláška
             wp_send_json_error('Upload souboru selhal.');
         }
 
         $original_path = $upload['file'];
+        $original_size = filesize($original_path);
 
-        // Ověření že soubor je v upload adresáři (path traversal ochrana)
+        // Path traversal ochrana
         $upload_dir = wp_normalize_path(wp_upload_dir()['basedir']);
         $real_original = realpath($original_path);
         if (!$real_original || strpos(wp_normalize_path($real_original), $upload_dir . '/') !== 0) {
@@ -128,45 +217,83 @@ class WebP_Suite {
             wp_send_json_error('Neplatná cesta souboru.');
         }
 
-        $original_size = filesize($original_path);
+        $result = $this->process_image($original_path, $short_side, $quality);
+        if (!$result) {
+            @unlink($original_path);
+            wp_send_json_error('Konverze selhala pro: ' . $original_name);
+        }
 
-        // Ochrana proti decompression bomb — kontrola zdrojových rozměrů PŘED načtením do GD
-        $image_info = @getimagesize($original_path);
+        // Registrace v knihovně médií
+        $pathinfo = pathinfo($result['webp_path']);
+        $attachment_id = wp_insert_attachment([
+            'post_mime_type' => 'image/webp',
+            'post_title'     => sanitize_text_field($pathinfo['filename']),
+            'post_content'   => '',
+            'post_status'    => 'inherit',
+        ], $result['webp_path']);
+
+        if (!is_wp_error($attachment_id)) {
+            require_once ABSPATH . 'wp-admin/includes/image.php';
+            $metadata = wp_generate_attachment_metadata($attachment_id, $result['webp_path']);
+            wp_update_attachment_metadata($attachment_id, $metadata);
+        }
+
+        if ($delete_original && $result['webp_path'] !== $original_path) {
+            @unlink($original_path);
+        }
+
+        $webp_size = filesize($result['webp_path']);
+
+        wp_send_json_success([
+            'original_name' => $original_name,
+            'original_size' => size_format($original_size),
+            'webp_size'     => size_format($webp_size),
+            'savings'       => round((1 - $webp_size / max(1, $original_size)) * 100, 1),
+            'dimensions'    => $result['width'] . ' x ' . $result['height'],
+            'attachment_id' => $attachment_id,
+        ]);
+    }
+
+    // =========================================================================
+    // Sdílená logika zpracování obrázku
+    // =========================================================================
+
+    /**
+     * Zpracuje obrázek: resize podle kratší strany + konverze na WebP.
+     *
+     * @return array{webp_path: string, width: int, height: int}|false
+     */
+    private function process_image(string $file_path, int $short_side, int $quality) {
+        // Bezpečnostní kontroly rozměrů
+        $image_info = @getimagesize($file_path);
         if (!$image_info) {
-            @unlink($original_path);
-            wp_send_json_error('Nelze přečíst rozměry obrázku: ' . $original_name);
+            return false;
         }
 
-        $src_w_check = $image_info[0];
-        $src_h_check = $image_info[1];
+        $src_w = $image_info[0];
+        $src_h = $image_info[1];
 
-        if ($src_w_check > self::MAX_SOURCE_DIMENSION || $src_h_check > self::MAX_SOURCE_DIMENSION) {
-            @unlink($original_path);
-            wp_send_json_error('Zdrojový obrázek je příliš velký (' . $src_w_check . 'x' . $src_h_check . ', max ' . self::MAX_SOURCE_DIMENSION . 'px).');
+        if ($src_w > self::MAX_SOURCE_DIMENSION || $src_h > self::MAX_SOURCE_DIMENSION) {
+            return false;
         }
-
-        if ($src_w_check * $src_h_check > self::MAX_PIXEL_BUDGET) {
-            @unlink($original_path);
-            wp_send_json_error('Zdrojový obrázek má příliš mnoho pixelů (' . number_format($src_w_check * $src_h_check) . ', max ' . number_format(self::MAX_PIXEL_BUDGET) . ').');
+        if ($src_w * $src_h > self::MAX_PIXEL_BUDGET) {
+            return false;
         }
 
         // Načtení obrázku
-        $src = $this->load_image($original_path);
+        $src = $this->load_image($file_path);
         if (!$src) {
-            @unlink($original_path);
-            wp_send_json_error('Nepodporovaný formát obrázku: ' . $original_name);
+            return false;
         }
 
-        // Korekce EXIF orientace (fotky z telefonu/fotoaparátu)
-        $src = $this->fix_orientation($src, $original_path);
-
+        // Korekce EXIF orientace
+        $src = $this->fix_orientation($src, $file_path);
         $src_w = imagesx($src);
         $src_h = imagesy($src);
 
-        // Proporcionální resize podle kratší strany — zachová poměr stran
+        // Proporcionální resize podle kratší strany
         $scale = $short_side / min($src_w, $src_h);
 
-        // Pokud je obrázek menší než cílová velikost, nezvětšovat
         if ($scale >= 1.0) {
             $dst_w = $src_w;
             $dst_h = $src_h;
@@ -175,83 +302,50 @@ class WebP_Suite {
             $dst_h = (int)round($src_h * $scale);
         }
 
-        // Ochrana proti memory exhaustion
         if ($dst_w * $dst_h > self::MAX_PIXEL_BUDGET) {
             imagedestroy($src);
-            @unlink($original_path);
-            wp_send_json_error('Výsledné rozměry jsou příliš velké.');
+            return false;
         }
 
         $dst = imagecreatetruecolor($dst_w, $dst_h);
         if (!$dst) {
             imagedestroy($src);
-            @unlink($original_path);
-            wp_send_json_error('Nelze vytvořit cílový obrázek (nedostatek paměti).');
+            return false;
         }
 
-        // Zachovat průhlednost
         imagealphablending($dst, false);
         imagesavealpha($dst, true);
-
         imagecopyresampled($dst, $src, 0, 0, 0, 0, $dst_w, $dst_h, $src_w, $src_h);
-
         imagedestroy($src);
 
-        // Uložení WebP — sanitizace názvu souboru + zajištění unikátnosti
-        $pathinfo = pathinfo($original_path);
+        // Uložení WebP
+        $pathinfo = pathinfo($file_path);
         $safe_filename = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $pathinfo['filename']);
         $webp_path = $pathinfo['dirname'] . '/' . $safe_filename . '.webp';
 
-        // Ochrana proti přepsání existujícího souboru (race condition)
         if (file_exists($webp_path)) {
             $webp_path = $pathinfo['dirname'] . '/' . $safe_filename . '-' . wp_generate_password(6, false) . '.webp';
         }
 
-        $webp_saved = imagewebp($dst, $webp_path, $quality);
+        $saved = imagewebp($dst, $webp_path, $quality);
         imagedestroy($dst);
 
-        if (!$webp_saved || !file_exists($webp_path)) {
+        if (!$saved || !file_exists($webp_path)) {
             @unlink($webp_path);
-            @unlink($original_path);
-            wp_send_json_error('Konverze na WebP selhala pro: ' . $original_name);
+            return false;
         }
 
-        $webp_size = filesize($webp_path);
-
-        // Registrace v knihovně médií
-        $attachment_id = wp_insert_attachment([
-            'post_mime_type' => 'image/webp',
-            'post_title'     => sanitize_text_field($pathinfo['filename']),
-            'post_content'   => '',
-            'post_status'    => 'inherit',
-        ], $webp_path);
-
-        if (!is_wp_error($attachment_id)) {
-            require_once ABSPATH . 'wp-admin/includes/image.php';
-            $metadata = wp_generate_attachment_metadata($attachment_id, $webp_path);
-            wp_update_attachment_metadata($attachment_id, $metadata);
-        }
-
-        // Smazání originálu
-        if ($delete_original) {
-            @unlink($original_path);
-        }
-
-        wp_send_json_success([
-            'original_name' => $original_name,
-            'original_size' => size_format($original_size),
-            'webp_size'     => size_format($webp_size),
-            'savings'       => round((1 - $webp_size / max(1, $original_size)) * 100, 1),
-            'dimensions'    => $dst_w . ' x ' . $dst_h,
-            'attachment_id' => $attachment_id,
-        ]);
+        return [
+            'webp_path' => $webp_path,
+            'width'     => $dst_w,
+            'height'    => $dst_h,
+        ];
     }
 
-    /**
-     * Opraví orientaci obrázku podle EXIF dat.
-     * JPEG fotky z telefonu/fotoaparátu mají pixely uložené v landscape,
-     * ale EXIF tag říká jak je otočit. GD tento tag ignoruje.
-     */
+    // =========================================================================
+    // Pomocné metody
+    // =========================================================================
+
     private function fix_orientation($img, string $path) {
         if (!function_exists('exif_read_data')) {
             return $img;
@@ -263,27 +357,27 @@ class WebP_Suite {
         }
 
         switch ((int)$exif['Orientation']) {
-            case 2: // Zrcadlově horizontálně
+            case 2:
                 imageflip($img, IMG_FLIP_HORIZONTAL);
                 break;
-            case 3: // Otočeno 180°
+            case 3:
                 $img = imagerotate($img, 180, 0);
                 break;
-            case 4: // Zrcadlově vertikálně
+            case 4:
                 imageflip($img, IMG_FLIP_VERTICAL);
                 break;
-            case 5: // Zrcadlově horizontálně + otočeno 270° CW
+            case 5:
                 imageflip($img, IMG_FLIP_HORIZONTAL);
                 $img = imagerotate($img, 270, 0);
                 break;
-            case 6: // Otočeno 90° CW (nejčastější — portrait fotka)
+            case 6:
                 $img = imagerotate($img, 270, 0);
                 break;
-            case 7: // Zrcadlově horizontálně + otočeno 90° CW
+            case 7:
                 imageflip($img, IMG_FLIP_HORIZONTAL);
                 $img = imagerotate($img, 90, 0);
                 break;
-            case 8: // Otočeno 270° CW
+            case 8:
                 $img = imagerotate($img, 90, 0);
                 break;
         }
@@ -292,7 +386,6 @@ class WebP_Suite {
     }
 
     private function load_image(string $path) {
-        // Detekce MIME z obsahu souboru (ne z přípony) — konzistentní s validací v uploadu
         $mime = wp_get_image_mime($path);
         if (!$mime) {
             return false;
